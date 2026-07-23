@@ -15,98 +15,75 @@ chrome_plus_version = "unknown"
 
 
 def get_latest_chrome_plus():
-    """通过 GitHub API 获取 chrome_plus 最新 release 中的 version.dll"""
+    """通过 GitHub API 获取 chrome_plus 最新 release 中的 version.dll（必须成功）"""
     global chrome_plus_version
-    try:
-        resp = requests.get(
-            CHROME_PLUS_API,
-            timeout=30,
-            headers={"Accept": "application/vnd.github.v3+json"},
-        )
-        resp.raise_for_status()
-        release = resp.json()
 
-        tag = release["tag_name"]
-        print(f"[chrome_plus] 最新版本: {tag}")
+    # 1. 获取最新 release 信息
+    resp = requests.get(
+        CHROME_PLUS_API,
+        timeout=30,
+        headers={"Accept": "application/vnd.github.v3+json"},
+    )
+    resp.raise_for_status()
+    release = resp.json()
+    tag = release["tag_name"]
+    print(f"[chrome_plus] 最新版本: {tag}")
 
-        # 查找包含 version.dll 的资产（通常名为 Chrome++_v*_x86_x64_arm64.7z）
-        asset_url = None
-        for asset in release["assets"]:
-            name = asset["name"]
-            if "x86_x64_arm64" in name and name.endswith(".7z"):
-                asset_url = asset["browser_download_url"]
-                print(f"[chrome_plus] 下载: {name}")
-                break
+    # 2. 查找资产（Chrome++_v*_x86_x64_arm64.7z）
+    asset_url = None
+    for asset in release["assets"]:
+        name = asset["name"]
+        if "x86_x64_arm64" in name and name.endswith(".7z"):
+            asset_url = asset["browser_download_url"]
+            print(f"[chrome_plus] 资产: {name}")
+            break
+    if not asset_url:
+        raise RuntimeError("未找到 chrome_plus 资产")
 
-        if not asset_url:
-            print("[chrome_plus] 未找到匹配的资产，回退到本地 version.dll")
-            chrome_plus_version = "fallback"
-            return False
+    # 3. 下载 7z 包
+    print(f"[chrome_plus] 下载中...")
+    resp = requests.get(asset_url, timeout=120)
+    resp.raise_for_status()
+    with open("chrome_plus.7z", "wb") as f:
+        f.write(resp.content)
+    print(f"[chrome_plus] 下载完成 ({len(resp.content)} bytes)")
 
-        # 下载 7z 包
-        resp = requests.get(asset_url, timeout=120)
-        resp.raise_for_status()
+    # 4. 列出内容（调试）+ 解压
+    os.system("./7zzs l chrome_plus.7z")
+    ret = os.system("./7zzs x chrome_plus.7z -y")
+    if ret != 0:
+        raise RuntimeError(f"7z 解压失败 (返回码: {ret})")
 
-        with open("chrome_plus.7z", "wb") as f:
-            f.write(resp.content)
+    # 5. 递归查找 x64/version.dll
+    dlls = glob.glob("**/version.dll", recursive=True)
+    print(f"[chrome_plus] 找到的 version.dll: {dlls}")
+    x64_dll = [d for d in dlls if "x64" in d.replace("\\", "/").split("/")]
+    if not x64_dll:
+        raise RuntimeError(f"未找到 x64/version.dll, 候选: {dlls}")
 
-        # 先列出 7z 包内容（调试用）
-        print("[chrome_plus] 7z 包内容:")
-        os.system("./7zzs l chrome_plus.7z")
+    # 6. 移动到根目录
+    target = x64_dll[0]
+    print(f"[chrome_plus] 选用: {target}")
+    shutil.move(target, "version.dll")
 
-        # 解压
-        ret = os.system("./7zzs x chrome_plus.7z -y")
-        if ret != 0:
-            print(f"[chrome_plus] 7z 解压失败 (返回码: {ret})，回退到本地 version.dll")
-            os.remove("chrome_plus.7z")
-            chrome_plus_version = "fallback"
-            return False
+    # 7. 清理
+    os.remove("chrome_plus.7z")
+    for d in glob.glob("*", recursive=False):
+        if os.path.isdir(d) and d not in ("build", ".git", ".github"):
+            shutil.rmtree(d, ignore_errors=True)
 
-        # 递归查找 x64/version.dll（兼容嵌套目录结构）
-        dlls = glob.glob("**/version.dll", recursive=True)
-        print(f"[chrome_plus] 找到的 version.dll: {dlls}")
-        # 排除仓库根目录的静态 version.dll，只从解压产物中查找
-        dlls = [d for d in dlls if d not in ("version.dll", "./version.dll")]
-        x64_dll = [d for d in dlls if "x64" in d.replace("\\", "/").split("/")]
-        if not x64_dll:
-            # 宽松匹配：只要路径不含 x86/arm64 就取第一个
-            x64_dll = [d for d in dlls if "x86" not in d and "arm64" not in d]
-        if x64_dll:
-            target = x64_dll[0]
-            print(f"[chrome_plus] 选用: {target}")
-            if os.path.exists("version.dll"):
-                os.remove("version.dll")
-            shutil.move(target, "version.dll")
-
-            # 清理解压产物
-            os.remove("chrome_plus.7z")
-            for d in glob.glob("*", recursive=False):
-                if os.path.isdir(d) and d not in ("build", ".git", ".github"):
-                    shutil.rmtree(d, ignore_errors=True)
-
-            chrome_plus_version = tag
-            print(f"[chrome_plus] ✓ version.dll 已更新到 {tag}")
-            return True
-        else:
-            print("[chrome_plus] 解压后未找到 version.dll，回退到本地 version.dll")
-            if os.path.exists("chrome_plus.7z"):
-                os.remove("chrome_plus.7z")
-            chrome_plus_version = "fallback"
-            return False
-
-    except Exception as e:
-        print(f"[chrome_plus] 获取失败: {e}，回退到本地 version.dll")
-        chrome_plus_version = "fallback"
-        return False
+    chrome_plus_version = tag
+    print(f"[chrome_plus] ✓ version.dll 已更新到 {tag}")
+    return True
 
 
-# 尝试获取最新 chrome_plus，失败则使用仓库中的静态 version.dll
-get_latest_chrome_plus()
-
-# ============================================================
-# Step 1: 通过 Google Omaha API 获取最新 Chrome 离线包
-# ============================================================
-print(f"[chrome_plus] 实际使用的 version.dll: 版本={chrome_plus_version}, 大小={os.path.getsize('version.dll')} bytes")
+# 获取最新 chrome_plus（失败即中止构建）
+print("[chrome_plus] 开始拉取最新 version.dll...")
+try:
+    get_latest_chrome_plus()
+except Exception as e:
+    print(f"[chrome_plus] 致命错误: {e}")
+    exit(1)
 
 url = "https://tools.google.com/service/update2"
 
