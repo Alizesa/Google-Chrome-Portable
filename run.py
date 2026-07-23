@@ -1,4 +1,4 @@
-import json
+import glob
 import os
 import shutil
 import xml.dom.minidom
@@ -49,25 +49,41 @@ def get_latest_chrome_plus():
         with open("chrome_plus.7z", "wb") as f:
             f.write(resp.content)
 
-        # 解压
-        os.system("./7zzs x chrome_plus.7z -y")
+        # 先列出 7z 包内容（调试用）
+        print("[chrome_plus] 7z 包内容:")
+        os.system("./7zzs l chrome_plus.7z")
 
-        # 提取 x64/version.dll
-        if os.path.exists("x64/version.dll"):
+        # 解压
+        ret = os.system("./7zzs x chrome_plus.7z -y")
+        if ret != 0:
+            print(f"[chrome_plus] 7z 解压失败 (返回码: {ret})，回退到本地 version.dll")
+            os.remove("chrome_plus.7z")
+            return False
+
+        # 递归查找 x64/version.dll（兼容嵌套目录结构）
+        dlls = glob.glob("**/version.dll", recursive=True)
+        print(f"[chrome_plus] 找到的 version.dll: {dlls}")
+        x64_dll = [d for d in dlls if "x64" in d.replace("\\", "/").split("/")]
+        if not x64_dll:
+            # 宽松匹配：只要文件名对且路径不含 x86/arm64 就取第一个
+            x64_dll = [d for d in dlls if "x86" not in d and "arm64" not in d]
+        if x64_dll:
+            target = x64_dll[0]
+            print(f"[chrome_plus] 选用: {target}")
             if os.path.exists("version.dll"):
                 os.remove("version.dll")
-            shutil.move("x64/version.dll", "version.dll")
+            shutil.move(target, "version.dll")
 
             # 清理解压产物
-            for d in ["x64", "x86", "arm64"]:
-                if os.path.isdir(d):
-                    shutil.rmtree(d)
             os.remove("chrome_plus.7z")
+            for d in glob.glob("*", recursive=False):
+                if os.path.isdir(d) and d not in ("build", ".git", ".github"):
+                    shutil.rmtree(d, ignore_errors=True)
 
             print(f"[chrome_plus] ✓ version.dll 已更新到 {chrome_plus_version}")
             return True
         else:
-            print("[chrome_plus] 解压后未找到 x64/version.dll，回退到本地 version.dll")
+            print("[chrome_plus] 解压后未找到 version.dll，回退到本地 version.dll")
             if os.path.exists("chrome_plus.7z"):
                 os.remove("chrome_plus.7z")
             return False
