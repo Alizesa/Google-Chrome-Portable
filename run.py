@@ -161,12 +161,20 @@ os.rename(r"Chrome-bin", "Chrome")
 shutil.move(r"Chrome", "build/release/Chrome")
 
 # ============================================================
-# Step 4: 写入构建名称（供 GitHub Actions artifact 命名）
+# Step 4: 写入构建信息（供 GitHub Actions artifact 命名及 Release 发行）
 # ============================================================
-env = os.getenv("GITHUB_ENV")
-with open(env, "a") as f:
-    date_str = datetime.now().strftime("%Y-%m-%d")
-    build_name = f"Win64_{version}_cp{chrome_plus_version}_{date_str}"
-    f.write(f"BUILD_NAME={build_name}")
+date_str = datetime.now().strftime("%Y-%m-%d")
+build_name = f"Win64_{version}_cp{chrome_plus_version}_{date_str}"
+build_info = {
+    "BUILD_NAME": build_name,
+    "CHROME_VERSION": version,
+    "CHROME_PLUS_VERSION": chrome_plus_version,
+}
+for variable in ("GITHUB_ENV", "GITHUB_OUTPUT"):
+    output_file = os.getenv(variable)
+    if output_file:
+        with open(output_file, "a", encoding="utf-8") as f:
+            for key, value in build_info.items():
+                f.write(f"{key}={value}\n")
 
 print(f"构建完成: {build_name}")
